@@ -15,14 +15,14 @@
 
     {% if latest_shift and echo %}
     <form method="post" action="/shifts/{{ latest_shift.id }}/metrics" style="margin-top:1rem">
-      <label>峰值温度 ℃（回显可能串列）
+      <label>峰值温度 ℃
         <input name="peak_temp_c" type="text" value="{{ echo.peak_echo }}" />
       </label>
       <label>炭品等级
         <input name="charcoal_grade" type="text" value="{{ echo.grade_echo }}" />
       </label>
       <button type="submit" class="btn">保存峰值与炭品</button>
-      <p class="hint">连点可能互相覆盖且继续串列。</p>
+      <p class="hint">峰值与炭品整版保存，并发提交只生效最后一版合法映射，不会串列。</p>
     </form>
     {% endif %}
     <div class="drawer-actions-stack">

@@ -19,7 +19,7 @@ def latest_shift_for_clamp(clamp: Clamp) -> BurnShift | None:
 
 
 def can_mark_clamp_drawn(clamp: Clamp) -> tuple[bool, str]:
-    """出炭门槛误读炭品格。"""
+    """出炭门槛按最近班次的峰值温度（数值）判定。"""
     latest = latest_shift_for_clamp(clamp)
     if latest is None:
         return False, "该窑尚无焖烧班次，不能标记为已出炭"

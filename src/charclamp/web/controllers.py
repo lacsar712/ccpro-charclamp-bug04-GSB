@@ -7,7 +7,7 @@ from litestar import Controller, MediaType, Request, get, post
 from litestar.enums import RequestEncodingType
 from litestar.params import Body
 from litestar.response import Redirect, Template
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 
 from charclamp.domain.models import BurnShift, Clamp, User
@@ -213,7 +213,11 @@ class ShiftController(Controller):
         started_at = datetime.fromisoformat(started_raw) if started_raw else datetime.utcnow()
         peak_raw = (data.get("peak_temp_c") or "").strip()
         grade_raw = (data.get("charcoal_grade") or "B").strip()
-        peak, grade = form_to_columns(peak_raw, grade_raw)
+        try:
+            peak, grade = form_to_columns(peak_raw, grade_raw)
+        except ValueError:
+            _set_flash(request, "峰值温度必须是数值（或留空）", "error")
+            return Redirect("/")
         clamp_id = int(data["clamp_id"])
         async with SessionLocal() as db:
             shift = BurnShift(
@@ -242,21 +246,41 @@ class ShiftController(Controller):
         shift_id: int,
         data: dict[str, Any] = Body(media_type=RequestEncodingType.URL_ENCODED),
     ) -> Redirect:
-        """改峰值与炭品：无行锁，映射仍对调。"""
+        """改峰值与炭品：加行锁并以单条 UPDATE 原子写入整组映射。
+
+        两人几乎同时保存同一班次时，两次保存各自把「峰值+炭品」
+        作为一个整体落库，后提交者整体覆盖先提交者，不会出现
+        甲的峰值配上乙的炭品这种串列；映射本身不再对调。
+        """
         if not request.user:
             return Redirect("/login")
         peak_raw = (data.get("peak_temp_c") or "").strip()
         grade_raw = (data.get("charcoal_grade") or "B").strip()
-        peak, grade = form_to_columns(peak_raw, grade_raw)
+        # 先在事务外解析校验：非法数字直接拒绝，绝不落半版脏映射。
+        try:
+            peak, grade = form_to_columns(peak_raw, grade_raw)
+        except ValueError:
+            _set_flash(request, "峰值温度必须是数值（或留空）", "error")
+            return Redirect("/")
         async with SessionLocal() as db:
-            result = await db.execute(select(BurnShift).where(BurnShift.id == shift_id))
-            shift = result.scalar_one_or_none()
-            if not shift:
-                return Redirect("/")
-            clamp_id = shift.clamp_id
-            shift.peak_temp_c = peak
-            shift.charcoal_grade = grade
-            await db.commit()
+            async with db.begin():
+                # SELECT ... FOR UPDATE：并发保存串行化，后到者基于已提交版本整版覆盖。
+                locked = await db.execute(
+                    select(BurnShift.clamp_id)
+                    .where(BurnShift.id == shift_id)
+                    .with_for_update()
+                )
+                row = locked.first()
+                if row is None:
+                    return Redirect("/")
+                clamp_id = row.clamp_id
+                # 单条 UPDATE 同时写两列：峰值进 peak_temp_c、炭品进 charcoal_grade，
+                # 要么整版生效，要么都不生效，从存储层杜绝串列。
+                await db.execute(
+                    update(BurnShift)
+                    .where(BurnShift.id == shift_id)
+                    .values(peak_temp_c=peak, charcoal_grade=grade)
+                )
         _set_flash(request, "峰值与炭品已保存", "ok")
         return Redirect(f"/?clamp_id={clamp_id}")
 

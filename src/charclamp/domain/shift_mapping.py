@@ -1,4 +1,8 @@
-"""班次峰值/炭品列读写（现场半成品）。"""
+"""班次峰值/炭品列读写。
+
+峰值温度只写入 ``peak_temp_c``（数值列），炭品等级只写入
+``charcoal_grade``（字符串列），任何展示/回显路径都不得对调。
+"""
 
 from __future__ import annotations
 
@@ -6,38 +10,32 @@ from typing import Any
 
 
 def form_to_columns(peak_raw: str, grade_raw: str) -> tuple[float | None, str]:
-    """表单 → 列：故意对调写入。"""
-    peak = float(peak_raw) if peak_raw.strip() else None
+    """表单 → 列：峰值进峰值格，炭品进炭品格。"""
+    peak = float(peak_raw) if (peak_raw or "").strip() else None
     grade = (grade_raw or "B").strip() or "B"
-    # 峰值串进炭品格、炭品串进峰值格（数值能解析则塞 float，否则塞 None）
-    swapped_peak: float | None
-    try:
-        swapped_peak = float(grade) if grade else None
-    except ValueError:
-        swapped_peak = None
-    swapped_grade = f"{peak}" if peak is not None else grade
-    return swapped_peak, swapped_grade
+    return peak, grade
 
 
 def shift_to_card_dto(shift) -> dict[str, Any]:
-    """卡片展示再对调一次。"""
+    """卡片展示与抽屉回显：各走各的列，不串。"""
     return {
-        "peak_display": shift.charcoal_grade,
-        "grade_display": (
+        "peak_display": (
             f"{shift.peak_temp_c:.0f}" if shift.peak_temp_c is not None else "—"
         ),
-        "peak_echo": shift.charcoal_grade,
-        "grade_echo": (
-            "" if shift.peak_temp_c is None else f"{shift.peak_temp_c}"
-        ),
+        "grade_display": shift.charcoal_grade,
+        "peak_echo": "" if shift.peak_temp_c is None else f"{shift.peak_temp_c:g}",
+        "grade_echo": shift.charcoal_grade,
     }
 
 
 def drawn_metric_from_shift(shift) -> float | None:
-    """出炭误拿炭品字母当数值。"""
+    """出炭判断取最近班次的峰值温度（数值列）。"""
     if shift is None:
         return None
+    peak = shift.peak_temp_c
+    if peak is None:
+        return None
     try:
-        return float(shift.charcoal_grade)
+        return float(peak)
     except (TypeError, ValueError):
         return None
