@@ -242,21 +242,27 @@ class ShiftController(Controller):
         shift_id: int,
         data: dict[str, Any] = Body(media_type=RequestEncodingType.URL_ENCODED),
     ) -> Redirect:
-        """改峰值与炭品：无行锁，映射仍对调。"""
+        """改峰值与炭品：行锁串行化，整版映射原子落库，并发不串列。"""
         if not request.user:
             return Redirect("/login")
         peak_raw = (data.get("peak_temp_c") or "").strip()
         grade_raw = (data.get("charcoal_grade") or "B").strip()
         peak, grade = form_to_columns(peak_raw, grade_raw)
         async with SessionLocal() as db:
-            result = await db.execute(select(BurnShift).where(BurnShift.id == shift_id))
-            shift = result.scalar_one_or_none()
-            if not shift:
-                return Redirect("/")
-            clamp_id = shift.clamp_id
-            shift.peak_temp_c = peak
-            shift.charcoal_grade = grade
-            await db.commit()
+            async with db.begin():
+                result = await db.execute(
+                    select(BurnShift)
+                    .where(BurnShift.id == shift_id)
+                    .with_for_update()
+                )
+                shift = result.scalar_one_or_none()
+                if not shift:
+                    return Redirect("/")
+                clamp_id = shift.clamp_id
+                # 峰值与炭品作为同一版合法映射整体写入；行锁保证两人
+                # 几乎同时保存时按提交顺序串行生效，绝不交叉串列。
+                shift.peak_temp_c = peak
+                shift.charcoal_grade = grade
         _set_flash(request, "峰值与炭品已保存", "ok")
         return Redirect(f"/?clamp_id={clamp_id}")
 
